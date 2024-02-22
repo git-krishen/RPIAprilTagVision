@@ -43,14 +43,14 @@ def detect_and_process_apriltag(frame, detector, estimator):
     filter_tags = [tag for tag in tag_info if tag.getDecisionMargin() > DETECTION_MARGIN_THRESHOLD]
     results = [ process_apriltag(estimator, tag) for tag in filter_tags ]
     # Note that results will be empty if no apriltag is detected
-    for result in results:
-        # frame = draw_tag(frame, result)
-        print(result)
+    # for result in results:
+    #     # frame = draw_tag(frame, result)
+    #     print(result)
 
     return frame, results
 
 # Display loop: captures a frame, detects apriltags, puts frame in outputstream, and publishes pose data to networktables
-def show_capture(cvSink, detector, estimator, image, outputstream, wEntry, xEntry, yEntry, zEntry, table):
+def show_capture(cvSink, detector, estimator, image, outputstream, tagEntry, table):
     while True:
         # Capture frame-by-frame
         time, frame = cvSink.grabFrame(image)
@@ -69,22 +69,23 @@ def show_capture(cvSink, detector, estimator, image, outputstream, wEntry, xEntr
             # xEntry.set([translation.X(), translation.Y(), translation.Z()])
             # yEntry.set([rotation.X(), rotation.Y(), rotation.Z()])
             # zEntry.set([center.x, center.y])
+            table.putNumberArray("apriltag", [tagId, translation.X(), 
+                                              translation.Y(), translation.Z(), 
+                                              rotation.X(), rotation.Y(), rotation.Z(), 
+                                              center.x, center.y])
 
-            table.putNumber("tagID", tagId)
-            table.putNumberArray("translation", [translation.X(), translation.Y(), translation.Z()])
-            table.putNumberArray("rotation", [rotation.X(), rotation.Y(), rotation.Z()])
-            table.putNumberArray("center", [center.x, center.y])
-            w = wEntry.getDouble(0.0)
-            x = xEntry.getDoubleArray(0.0)
-            y = yEntry.getDoubleArray(0.0)
-            z = zEntry.getDoubleArray(0.0)
-            print("Tag ID: ", w, " Translation (X, Y, Z): ", x, "Rotation (X, Y, Z)", y, " Center Point: ", z)
+            # table.putNumber("tagID", tagId)
+            # table.putNumberArray("translation", [translation.X(), translation.Y(), translation.Z()])
+            # table.putNumberArray("rotation", [rotation.X(), rotation.Y(), rotation.Z()])
+            # table.putNumberArray("center", [center.x, center.y])
+            aprilTag = tagEntry.getDoubleArray([])
+            print(f"Tag ID: {aprilTag[0]},  Translation (X, Y, Z): [{aprilTag[1]}, {aprilTag[2]}, {aprilTag[3]}] Rotation (X, Y, Z): [{aprilTag[4]}, {aprilTag[5]}, {aprilTag[6]}] Center Point: [{aprilTag[7]}, {aprilTag[8]}] @ {time}")
 
 def startCamera():
     """Start running the camera."""
     print("Starting camera '{}' on {}".format("Webcam", "/dev/video0"))
     # camera = UsbCamera("Webcam", "/dev/video0")
-    camera = CameraServer.startAutomaticCapture()
+    camera = CameraServer.startAutomaticCapture(2)
     camera.setResolution(xRes, yRes)
     # camera.setConnectionStrategy(VideoSource.ConnectionStrategy.kConnectionKeepOpen)
     cvSink = CameraServer.getVideo()
@@ -101,10 +102,7 @@ def main():
         print("Setting up NetworkTables server")
         ntinst.startServer()
         table = ntinst.getTable("datatable")
-        wEntry = table.getEntry("tagID")
-        xEntry = table.getEntry("translation")
-        yEntry = table.getEntry("rotation")
-        zEntry = table.getEntry("center")
+        tagEntry = table.getEntry("apriltag")
         # wEntry = table.getDoubleTopic("tagID").publish()
         # xEntry = table.getDoubleArrayTopic("translation").publish()
         # yEntry = table.getDoubleArrayTopic("rotation").publish()
@@ -115,15 +113,11 @@ def main():
         ntinst.setServerTeam(team)
         ntinst.startDSClient()
         table = ntinst.getTable("datatable")
-        wEntry = table.getEntry("tagID")
-        xEntry = table.getEntry("translation")
-        yEntry = table.getEntry("rotation")
-        zEntry = table.getEntry("center")
+        tagEntry = table.getEntry("apriltag")
     cvSink, outputStream = startCamera()
     image = numpy.zeros((xRes, yRes, 3), dtype = "uint8")
-    # print(image.shape, image.dtype)
     detector, estimator = get_apriltag_detector_and_estimator((xRes, yRes))
-    show_capture(cvSink, detector, estimator, image, outputStream, wEntry, xEntry, yEntry, zEntry, table)
-    # cleanup_capture(capture)
+    show_capture(cvSink, detector, estimator, image, outputStream, tagEntry, table)
+
 if __name__ == '__main__':
     main()
