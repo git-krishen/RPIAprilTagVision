@@ -1,7 +1,7 @@
 # Credit: Lobrien
 import cv2
 import robotpy_apriltag
-import numpy
+import numpy as np
 from wpimath.geometry import Pose3d
 from cscore import CameraServer
 from ntcore import NetworkTableInstance
@@ -10,8 +10,8 @@ from time import sleep
 
 team = 5052
 server = True
-xRes = 320
-yRes = 224
+xRes = 640 #320
+yRes = 480 #224
 DETECTION_MARGIN_THRESHOLD = 100
 
 # This function is called once to initialize the apriltag detector and the pose estimator
@@ -77,7 +77,7 @@ def initNetworkTable():
 
 def initCaptureAndEstimator():
     cvSink, outputStream = startCamera(0)
-    image = numpy.zeros((xRes, yRes, 3), dtype = "uint8")
+    image = np.zeros((xRes, yRes, 3), dtype = "uint8")
     detector, estimator = get_apriltag_detector_and_estimator((xRes, yRes))
     return cvSink, detector, estimator, image, outputStream
 
@@ -144,49 +144,76 @@ def startCamera(cameraPort):
     print("Starting camera '{}' on {}".format("Webcam", "/dev/video0"))
     # camera = UsbCamera("Webcam", "/dev/video0")
     camera = CameraServer.startAutomaticCapture(cameraPort)
-    camera.setResolution(xRes, yRes)
+    assert camera.setResolution(xRes,yRes)
     # camera.setConnectionStrategy(VideoSource.ConnectionStrategy.kConnectionKeepOpen)
     cvSink = CameraServer.getVideo()
     cvSink.setSource(camera)
     outputStream = CameraServer.putVideo("WebcamVid", xRes, yRes)
     return cvSink, outputStream
 
+
 def runRingDetector():
-    cvSink, outputStream = startCamera(1)
-    image = numpy.zeros((xRes, yRes, 3), dtype = "uint8")
-    ORANGE_MIN = numpy.array([1, 95, 150])
-    ORANGE_MAX = numpy.array([27, 255, 255])
+    cvSink, outputStream = startCamera(2)
+    image = np.zeros((xRes, yRes, 3), dtype = "uint8")
+    ORANGE_MIN = np.array([3, 95, 150])
+    ORANGE_MAX = np.array([27, 255, 255])
+    K = np.array([[1.12482383e+03, 0.00000000e+00, 6.65189123e+02],
+                 [0.00000000e+00, 1.12453295e+03, 3.51254049e+02],
+                 [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]], dtype=np.float64)
+    distMatrix = np.array([ 0.13628821, -1.04123806,  0.00309366,  0.00362783,  1.72407517], dtype=np.float64)
     while True:
-        print("second func")
-        time, frame = cvSink .grabFrame(image)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(frame, ORANGE_MIN, ORANGE_MAX)
-        frame = cv2.bitwise_and(frame, frame, mask=mask)
-        frame = cv2.cvtColor(frame, cv2.COLOR_HSV2BGR)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Get and process frame
+        time, frame = cvSink.grabFrame(image)
+        frame = cv2.undistort(frame, K, distMatrix)
+        hsvFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsvFrame, ORANGE_MIN, ORANGE_MAX)
+        maskedFrame = cv2.bitwise_and(hsvFrame, hsvFrame, mask=mask)
+        maskedFrame = cv2.cvtColor(maskedFrame, cv2.COLOR_HSV2BGR)
+        gray = cv2.cvtColor(maskedFrame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (7,7), 0)
         _, threshold = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+        # Find ellipse contours
         contours, _ = cv2.findContours(gray, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         big_ellipse = None
         max_area = 0
+        ellipseWidth = 0
+        ellipseHeight = 0
         for contour in contours:
             if len(contour) >= 5:
                 ellipse = cv2.fitEllipse(contour)
-                width = ellipse[1][0]
-                height = ellipse[1][1]
-                area = width * height * numpy.pi # Calculate the area of the fitted ellipse
-                if area > max_area and width > 10 and height > 10:
+                ellipseWidth = ellipse[1][0]
+                ellipseHeight = ellipse[1][1]
+                area = ellipseWidth * ellipseHeight * np.pi # Calculate the area of the fitted ellipse
+                if area > max_area and ellipseWidth > 10 and ellipseHeight > 10:
                     max_area = area
                     big_ellipse = ellipse
 
-
+        # Get center of found ellipse or return middle of screen as default
+        if(big_ellipse is not None):
+            ellipseCenter = (big_ellipse[0][0], big_ellipse[0][1], 1)
+        else:
+            ellipseCenter = (xRes//2,yRes//2,1)
         
+        #Calculate angle in x direction of ellipse center to camera
+        # TODO, check algorithm to make sure of accuracy
+        Ki = np.linalg.inv(K)
+        ray = Ki.dot([ellipseCenter[0], 0, 1.0])
+        centerRay = Ki.dot([0,0,1])
+        cos_angle = centerRay.dot(ray) / (np.linalg.norm(centerRay) * np.linalg.norm(ray))
+        angle_radians = np.arccos(cos_angle)
+        print((angle_radians*(180/np.pi))-13.117018869768696)
+        
+        # Image output (for testing)
         cv2.ellipse(frame, big_ellipse, (0,255,0), 2,2)
+        cv2.line(frame, (xRes//2,yRes//2), (int(np.cos(angle_radians)),int((np.sin(angle_radians)))), (0,0,255), 2)
+        cv2.circle(frame, (int(ellipseCenter[0]), int(ellipseCenter[1])), 10, (255,0,0), 2)
         cv2.imshow('final', frame)
+
+        cv2.ellipse(maskedFrame, big_ellipse, (0,255,0),2,2)
+        cv2.circle(maskedFrame, (int(ellipseCenter[0]), int(ellipseCenter[1])), 10, (255,0,0), 2)
+        cv2.imshow('mask', maskedFrame)
+
         cv2.waitKey(1)
-
-        #TODO figure out OpenCV camera calibration
-        #TODO implement matrix to find angle to camera of object
-
 
 
 # Main function:
